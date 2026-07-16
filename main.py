@@ -2,6 +2,9 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 import argparse
+import prompts
+from call_function import available_functions
+import json
 
 def get_api_key():
     load_dotenv()
@@ -23,10 +26,10 @@ def create_client(api_key):
         base_url="https://openrouter.ai/api/v1"
     )
     
-def print_usage_info(completion, messages, verbose=False):
-    if completion.usage:
-        prompt_tokens = completion.usage.prompt_tokens
-        response_tokens = completion.usage.completion_tokens
+def print_usage_info(response, messages, verbose=False):
+    if response.usage:
+        prompt_tokens = response.usage.prompt_tokens
+        response_tokens = response.usage.completion_tokens
 
         if verbose:
             print("User prompt:", messages[0]["content"])
@@ -34,8 +37,12 @@ def print_usage_info(completion, messages, verbose=False):
             print(f"Response tokens: {response_tokens}")
         
         print("Response: ")
-        print(completion.choices[0].message.content)
-            
+        if response.choices[0].message.tool_calls:
+            for tool_call in response.choices[0].message.tool_calls:
+                function_args = json.loads(tool_call.function.arguments or "{}")
+                print(f"Calling function: {tool_call.function.name}({function_args})")
+        else:
+            print(response.choices[0].message.content)
     else:
         raise ValueError("No usage information returned from the API.")
 
@@ -47,15 +54,20 @@ def main():
     client = create_client(api_key)
     
     messages=[
-    {
-        "role": "user",
-        "content": user_prompt,
-    }
+        {
+            "role": "system",
+            "content": prompts.system_prompt    
+        },
+        {
+            "role": "user",
+            "content": user_prompt,
+        }
 ]
     
     completion = client.chat.completions.create(
         model="openrouter/free",
-        messages=messages
+        messages=messages,
+        tools=available_functions
     )
     
     print_usage_info(completion, messages, verbose)
