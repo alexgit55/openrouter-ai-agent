@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import argparse
 import prompts
-from call_function import available_functions
+import call_function
 import json
 
 def get_api_key():
@@ -32,15 +32,21 @@ def print_usage_info(response, messages, verbose=False):
         response_tokens = response.usage.completion_tokens
 
         if verbose:
-            print("User prompt:", messages[0]["content"])
+            print("User prompt:", messages[1]["content"])
             print(f"Prompt tokens: {prompt_tokens}")
             print(f"Response tokens: {response_tokens}")
         
         print("Response: ")
         if response.choices[0].message.tool_calls:
             for tool_call in response.choices[0].message.tool_calls:
-                function_args = json.loads(tool_call.function.arguments or "{}")
-                print(f"Calling function: {tool_call.function.name}({function_args})")
+                result_message = call_function.call_function(tool_call=tool_call, verbose=verbose )
+                if not result_message["content"]:
+                    raise Exception(f"Error: No response received from request")
+                if verbose:
+                    print(f"-> {result_message['content']}")
+                else:
+                    print(f"{result_message['content']}")
+                
         else:
             print(response.choices[0].message.content)
     else:
@@ -64,13 +70,13 @@ def main():
         }
 ]
     
-    completion = client.chat.completions.create(
+    response = client.chat.completions.create(
         model="openrouter/free",
         messages=messages,
-        tools=available_functions
+        tools=call_function.available_functions
     )
     
-    print_usage_info(completion, messages, verbose)
+    print_usage_info(response, messages, verbose)
 
 if __name__ == "__main__":
     main()
