@@ -1,82 +1,81 @@
+import argparse
 import os
+import sys
+
 from dotenv import load_dotenv
 from openai import OpenAI
-import argparse
-import prompts
-import call_function
-import json
 
-def get_api_key():
-    load_dotenv()
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
-        raise ValueError("OPENROUTER_API_KEY is not set in the environment variables.")
-    return api_key
+from call_function import available_functions, call_function
+from prompts import system_prompt
 
-def get_user_prompt():
-    parser = argparse.ArgumentParser(description="Chatbot")
-    parser.add_argument("user_prompt", type=str, help="User prompt")
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    args = parser.parse_args()
-    return args.user_prompt, args.verbose
-
-def create_client(api_key):
-    return OpenAI(
-        api_key=api_key,
-        base_url="https://openrouter.ai/api/v1"
-    )
-    
-def print_usage_info(response, messages, verbose=False):
-    if response.usage:
-        prompt_tokens = response.usage.prompt_tokens
-        response_tokens = response.usage.completion_tokens
-
-        if verbose:
-            print("User prompt:", messages[1]["content"])
-            print(f"Prompt tokens: {prompt_tokens}")
-            print(f"Response tokens: {response_tokens}")
-        
-        print("Response: ")
-        if response.choices[0].message.tool_calls:
-            for tool_call in response.choices[0].message.tool_calls:
-                result_message = call_function.call_function(tool_call=tool_call, verbose=verbose )
-                if not result_message["content"]:
-                    raise Exception(f"Error: No response received from request")
-                if verbose:
-                    print(f"-> {result_message['content']}")
-                else:
-                    print(f"{result_message['content']}")
-                
-        else:
-            print(response.choices[0].message.content)
-    else:
-        raise ValueError("No usage information returned from the API.")
-
-def main():
-    api_key = get_api_key()
-    
-    user_prompt, verbose = get_user_prompt()
-    
-    client = create_client(api_key)
-    
-    messages=[
-        {
-            "role": "system",
-            "content": prompts.system_prompt    
-        },
-        {
-            "role": "user",
-            "content": user_prompt,
-        }
-]
-    
+def generate_content(client: OpenAI, messages: list, verbose: bool) -> str | None:
     response = client.chat.completions.create(
         model="openrouter/free",
         messages=messages,
-        tools=call_function.available_functions
+        tools=available_functions,
     )
+    if not response.usage:
+        raise RuntimeError("API response appears to be malformed")
+
+    if verbose:
+        print("Prompt tokens:", response.usage.prompt_tokens)
+        print("Response tokens:", response.usage.completion_tokens)
+
+    message = response.choices[0].message
+    messages.append(message)
+
+    if not message.tool_calls:
+        return message.content
+
+    for tool_call in message.tool_calls:
+        if tool_call.type != "function":
+            continue
+        result_message = call_function(tool_call, verbose)
+        if not result_message.get("content"):
+            raise RuntimeError(f"Empty function response for {tool_call.function.name}")
+        if verbose:
+            print(f"-> {result_message['content']}")
+        messages.append(result_message)
+
+    return None
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="AI Code Assistant")
+    parser.add_argument("user_prompt", type=str, help="Prompt to send to the LLM")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    args = parser.parse_args()
+
+    load_dotenv()
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY environment variable not set")
+
+    MAX_ITERS = int(os.environ.get("MAX_ITERS"))
     
-    print_usage_info(response, messages, verbose)
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": args.user_prompt},
+    ]
+    if args.verbose:
+        print(f"User prompt: {args.user_prompt}\n")
+
+    for _ in range(MAX_ITERS):
+        try:
+            final_response = generate_content(client, messages, args.verbose)
+            if final_response:
+                print("Final response:")
+                print(final_response)
+                return
+        except Exception as e:
+            print(f"Error in generate_content: {e}")
+
+    print(f"Maximum iterations ({MAX_ITERS}) reached")
+    sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
